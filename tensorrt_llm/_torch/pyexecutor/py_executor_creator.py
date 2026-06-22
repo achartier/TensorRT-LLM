@@ -339,10 +339,13 @@ def create_py_executor(
 
     assert llm_args.kv_cache_config, "Expect llm_args.kv_cache_config is not None"
     kv_cache_config = llm_args.kv_cache_config
-    if os.getenv("FORCE_DETERMINISTIC", "0") == "1":
+    force_deterministic = os.getenv("FORCE_DETERMINISTIC", "0") == "1"
+    if force_deterministic:
         # Disable KV cache reuse for deterministic mode
         kv_cache_config.enable_block_reuse = False
         kv_cache_config.enable_partial_reuse = False
+        llm_args.disable_overlap_scheduler = True
+        llm_args.moe_config.disable_finalize_fusion = True
 
     decoding_config = llm_args.decoding_config
 

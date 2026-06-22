@@ -1,4 +1,5 @@
 import math
+import os
 from typing import Optional
 
 import torch
@@ -16,6 +17,10 @@ from .interface import (AttentionBackend, AttentionForwardArgs, AttentionMask,
                         merge_attention_forward_args)
 from .sparse.kernel import triton_index_gather
 from .sparse.params import SparseParams
+
+
+def _force_deterministic() -> bool:
+    return os.getenv("FORCE_DETERMINISTIC", "0") == "1"
 
 
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
@@ -414,7 +419,7 @@ class VanillaAttention(AttentionBackend[VanillaAttentionMetadata]):
             causal=attention_mask == PredefinedAttentionMask.CAUSAL
             and not is_cross,
             alibi_slopes=None,
-            deterministic=False,
+            deterministic=_force_deterministic(),
             return_attn_probs=False,
         )
 

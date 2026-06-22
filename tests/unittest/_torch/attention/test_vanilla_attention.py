@@ -1,3 +1,6 @@
+import os
+import sys
+import types
 import unittest
 from unittest.mock import patch
 
@@ -66,6 +69,59 @@ class TestVanillaAttention(unittest.TestCase):
             )
 
         self.assertEqual(observed_is_causal, [False, True])
+
+    def _run_no_kv_cache_forward_with_force_deterministic(
+            self, force_deterministic: str) -> bool:
+        calls = []
+        fake_flash_attn = types.ModuleType("flash_attn")
+        fake_flash_attn_interface = types.ModuleType(
+            "flash_attn.flash_attn_interface")
+
+        def fake_flash_attn_varlen_func(q, *args, deterministic, **kwargs):
+            del args, kwargs
+            calls.append(deterministic)
+            return torch.zeros_like(q)
+
+        fake_flash_attn_interface.flash_attn_varlen_func = \
+            fake_flash_attn_varlen_func
+        fake_flash_attn.flash_attn_interface = fake_flash_attn_interface
+
+        vanilla_attn = VanillaAttention(layer_idx=0,
+                                        num_heads=2,
+                                        head_dim=4,
+                                        num_kv_heads=1)
+        q = torch.randn(3, 8, dtype=torch.float16)
+        k = torch.randn(3, 4, dtype=torch.float16)
+        v = torch.randn(3, 4, dtype=torch.float16)
+        metadata = types.SimpleNamespace(seq_lens=torch.tensor([2, 1]),
+                                         seq_lens_kv=None,
+                                         is_cross=False)
+
+        with patch.dict(
+                sys.modules, {
+                    "flash_attn": fake_flash_attn,
+                    "flash_attn.flash_attn_interface":
+                    fake_flash_attn_interface,
+                }), patch.dict(
+                    os.environ,
+                    {"FORCE_DETERMINISTIC": force_deterministic}):
+            vanilla_attn.no_kv_cache_forward(
+                q,
+                k,
+                v,
+                num_heads=2,
+                num_kv_heads=1,
+                metadata=metadata,
+                attention_mask=PredefinedAttentionMask.CAUSAL)
+
+        self.assertEqual(len(calls), 1)
+        return calls[0]
+
+    def test_no_kv_cache_forward_honors_force_deterministic(self):
+        self.assertFalse(
+            self._run_no_kv_cache_forward_with_force_deterministic("0"))
+        self.assertTrue(
+            self._run_no_kv_cache_forward_with_force_deterministic("1"))
 
     def test_vanilla_attention(self):
         num_heads = 32
