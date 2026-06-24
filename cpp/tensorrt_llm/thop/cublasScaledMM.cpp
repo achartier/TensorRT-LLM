@@ -17,6 +17,7 @@
 #include "cublasScaledMMLut.h"
 #include "tensorrt_llm/common/cublasMMWrapper.h"
 #include "tensorrt_llm/common/cudaUtils.h"
+#include "tensorrt_llm/common/envUtils.h"
 #include "tensorrt_llm/kernels/userbuffers/ub_interface.h"
 #include "tensorrt_llm/plugins/common/plugin.h"
 #include "tensorrt_llm/plugins/gemmPlugin/gemmPlugin.h"
@@ -168,9 +169,27 @@ void cublas_gemm_caller(torch::Tensor& out, torch::Tensor const& a, torch::Tenso
         use_scale = true;
     }
 
-    int32_t m = a.sizes()[0];
+    int32_t orig_m = a.sizes()[0];
     int32_t n = b.sizes()[1];
     int32_t k = a.sizes()[1];
+
+    // When FORCE_DETERMINISTIC, pad m to the next power of 2 (min 8) so that
+    // batch sizes within the same bucket always use the same cuBLAS algorithm.
+    int32_t m = orig_m;
+    torch::Tensor a_padded;
+    bool did_pad = false;
+    if (tensorrt_llm::common::getEnvForceDeterministic() && m > 0)
+    {
+        int32_t const padded_m = std::max(nextPowerOfTwo(m), 8);
+        if (padded_m > m)
+        {
+            a_padded = torch::zeros({padded_m, k}, a.options());
+            a_padded.narrow(0, 0, orig_m).copy_(a);
+            m = padded_m;
+            did_pad = true;
+        }
+    }
+    auto const& a_ref = did_pad ? a_padded : a;
 
     thread_local std::shared_ptr<CublasMMWrapper> cublasWrapper;
     if (cublasWrapper == nullptr)
@@ -192,11 +211,18 @@ void cublas_gemm_caller(torch::Tensor& out, torch::Tensor const& a, torch::Tenso
     auto const workspace_options = torch::TensorOptions().dtype(torch::kUInt8).device(a.device());
     auto workspace = torch::empty(CUBLAS_WORKSPACE_SIZE, workspace_options);
 
-    auto stream = at::cuda::getCurrentCUDAStream(a.get_device());
+    auto stream = at::cuda::getCurrentCUDAStream(a_ref.get_device());
 
-    auto* a_ptr = static_cast<void*>(a.data_ptr());
+    torch::Tensor out_padded;
+    if (did_pad)
+    {
+        out_padded = torch::empty({m, n}, out.options());
+    }
+    auto& out_ref = did_pad ? out_padded : out;
+
+    auto* a_ptr = static_cast<void*>(a_ref.data_ptr());
     auto* b_ptr = static_cast<void*>(b.data_ptr());
-    auto* out_ptr = static_cast<void*>(out.data_ptr());
+    auto* out_ptr = static_cast<void*>(out_ref.data_ptr());
     auto* ws_ptr = static_cast<void*>(workspace.data_ptr());
     void* a_scale = nullptr;
     void* b_scale = nullptr;
@@ -236,6 +262,11 @@ void cublas_gemm_caller(torch::Tensor& out, torch::Tensor const& a, torch::Tenso
     cublasWrapper->Gemm(CUBLAS_OP_T, CUBLAS_OP_N, n, m, k, /*A=*/b_ptr, /*lda=*/k, /*B=*/a_ptr, /*ldb=*/k, out_ptr,
         /*ldc=*/n, 1.0F, 0.0F, algo, has_algo, true);
     cublasWrapper->destroyDescriptors();
+
+    if (did_pad)
+    {
+        out.copy_(out_padded.narrow(0, 0, orig_m));
+    }
 }
 
 } // namespace

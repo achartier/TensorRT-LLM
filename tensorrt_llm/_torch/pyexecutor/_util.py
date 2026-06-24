@@ -2133,8 +2133,17 @@ def create_py_executor_instance(
             two_step_lookahead=mapping.has_pp(),
             no_schedule_until_state=no_schedule_until_state)
 
-        mb_scheduler = BindMicroBatchScheduler(max_batch_size, max_num_tokens,
-                                               ctx_chunk_config)
+        if os.getenv("FORCE_DETERMINISTIC", "0") == "1":
+            from .scheduler import PyMicroBatchScheduler
+            mb_scheduler = PyMicroBatchScheduler(
+                max_batch_size,
+                max_num_tokens,
+                ctx_chunk_config,
+                no_schedule_until_state=no_schedule_until_state)
+        else:
+            mb_scheduler = BindMicroBatchScheduler(max_batch_size,
+                                                   max_num_tokens,
+                                                   ctx_chunk_config)
 
         reorder_policy_config = llm_args.reorder_policy_config
         if reorder_policy_config is not None:

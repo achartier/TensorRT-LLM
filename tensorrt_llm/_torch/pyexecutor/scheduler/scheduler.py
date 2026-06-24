@@ -1,5 +1,6 @@
 import dataclasses
 import inspect
+import os
 from abc import ABC, abstractmethod
 from collections import namedtuple
 from dataclasses import dataclass
@@ -473,6 +474,7 @@ class PyMicroBatchScheduler(MicroBatchScheduler):
         self.max_num_tokens = max_num_tokens
         self.ctx_chunk_config = ctx_chunk_config
         self.max_context_length = max_num_tokens
+        self._force_deterministic = os.getenv("FORCE_DETERMINISTIC", "0") == "1"
         # Match C++ MicroBatchScheduler defaults (see algorithms.cpp line 68-70)
         self.no_schedule_until_state = no_schedule_until_state
         self.no_schedule_after_state = no_schedule_after_state
@@ -590,6 +592,8 @@ class PyMicroBatchScheduler(MicroBatchScheduler):
                     )
                     context_requests.append(req)
                     batch_num_tokens += compute_tokens
+                    if self._force_deterministic:
+                        break
                 else:
                     # Chunking Enabled: Tentative schedule
                     req.context_chunk_size = req.context_remaining_length
@@ -688,6 +692,11 @@ class PyMicroBatchScheduler(MicroBatchScheduler):
         # C++ reference: utils::sortRequests in inflightBatchingUtils.cpp
         encoder_requests.sort(key=_get_lora_task_id)
         self._sort_requests(context_requests, generation_requests, not all_context_requests_fit)
+
+        # When deterministic, don't mix context and generation in the same
+        # batch — different total m changes GEMM results, affecting KV cache.
+        if self._force_deterministic and context_requests and generation_requests:
+            context_requests.clear()
 
         # Summary logs
         logger.debug(
