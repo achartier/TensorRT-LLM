@@ -527,6 +527,17 @@ class UnquantizedLinearMethod(LinearMethodBase):
                 out_dtype=None,
                 output_buffer_kind=output_buffer_kind,
                 group=group)
+        elif os.getenv("FORCE_DETERMINISTIC", "0") == "1":
+            orig_shape = input.shape
+            input_2d = input.view(-1, orig_shape[-1])
+            output = torch.ops.trtllm.cublas_mm(input_2d,
+                                                module.weight.t(),
+                                                bias,
+                                                out_dtype=None,
+                                                output_buffer_kind=int(
+                                                    BufferKind.DEFAULT),
+                                                group=None)
+            output = output.view(*orig_shape[:-1], output.shape[-1])
         else:
             output = F.linear(input, module.weight, bias)
         return output

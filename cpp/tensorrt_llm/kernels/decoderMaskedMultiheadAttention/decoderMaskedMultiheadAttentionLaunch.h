@@ -268,6 +268,14 @@ void mmha_launch_kernel_ex(KernelParamsType const& params, KVCacheBuffer const& 
         return;
     }
 
+    // When FORCE_DETERMINISTIC, use fixed block size to ensure identical
+    // per-query results regardless of batch_size (which affects block_size_factor).
+    if (tensorrt_llm::common::getEnvForceDeterministic())
+    {
+        MMHA_KERNEL(THDS_PER_BLOCK, false);
+        return;
+    }
+
     // Tune block size based on batchxhead to increase occupancy.
     int num_blocks_per_sm = -1;
     // Set 0 dynamic shared memory size as we need the number of available blocks limited by registers.
