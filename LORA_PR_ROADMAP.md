@@ -3,7 +3,7 @@
 Findings from LoRA validation testing across dense, MoE, and hybrid models
 with bf16 and fp8 adapter weights. Each section is a self-contained PR.
 
-## Current Status (2026-08-10)
+## Current Status (2026-08-23)
 
 ### Landed upstream
 
@@ -11,25 +11,28 @@ with bf16 and fp8 adapter weights. Each section is a self-contained PR.
 - FP8 adapter files load through the BF16/FP16 upcast path from #12848 (`de1212718f`).
 - LoRA weights were removed from PyTorch request broadcast in #12959 (`3db10d9179`), so the pickle replacement proposed in PR 5 is no longer needed for this path.
 - Dense FP8 LoRA support landed in #16810 (`d247d1454a`). The merged scope keeps adapter weights and activations in E4M3 through the homogeneous PEFT cache and native grouped GEMM, supports eager and CUDA-graph execution, and casts the LoRA delta back to the model activation dtype before accumulation.
+- B200 native FP8 LoRA support landed in #17521 (`aaaf65998b`). The merged scope adds dedicated SM100 eager and CUDA-graph grouped-GEMM dispatch, runtime kernel-capability detection, B200 regression coverage, and architecture support documentation while preserving compute-dtype fallback when native kernels are unavailable.
 
 ### Post-merge state
 
-- Production support is intentionally limited to dense LoRA on SM90. SM120/SM121 enablement requires separate kernel validation and is deferred.
+- Production native FP8 adapter support now covers dense LoRA on SM90 and SM100. SM103/SM107 and SM120/SM121 remain disabled and use the compute-dtype fallback path.
 - Routed-expert MoE FP8 LoRA remains unsupported. FP8 expert adapters are rejected instead of being passed to the compute-dtype fused-MoE path.
 - The final PR CI twice timed out in `TestNemotron3Super120B::test_auto_dtype[mtp_nextn=0-block_reuse=False-use_py_transceiver=False]` on different B200 nodes. This exact disaggregated-serving test was previously tracked by NVBug 6465993 and fixed by #16505 (`cf44a1ccee`). The test disables LoRA and runs outside the SM90-only FP8 path, so no code-path relationship to #16810 was found. The PR subsequently merged.
-- B200/SM100 enablement is the next planned investigation. Exact PEFT-cache byte-budget recalculation, SM120/SM121 support, routed-expert MoE support, and broader performance characterization remain later follow-up work.
+- The final #17521 pre-merge pipeline (`L0_MergeRequest_PR` #55954) passed on reviewed tip `a4483f2`; the PR then merged as `aaaf65998b`.
+- Exact PEFT-cache byte-budget recalculation, SM120/SM121 support, routed-expert MoE support, and broader performance characterization remain follow-up work.
 
-### Next investigation: B200 (SM100)
+### Next steps
 
-- Start from `origin/main` at or after #16810 (`d247d1454a`), not from the broad prototype branch. The remote `fork/fp8-lora-grouped-gemm` branch remains available for design history after deleting its local branch.
-- Audit the explicit architecture gates in `tensorrt_llm/lora_manager.py`, eager grouped GEMM, and CUDA-graph grouped GEMM. Enable SM100 independently while keeping SM120/SM121 disabled.
-- First establish whether the existing CUTLASS SM90 collective can be compiled and launched correctly for SM100. If not, add a dedicated SM100 kernel instantiation instead of weakening the runtime check.
-- Preserve the current dense-only, homogeneous E4M3 cache contract and rank/hidden/output alignment checks. Routed-expert MoE remains out of scope.
-- Validate on a B200 with the tekit container: build the relevant SM100 C++ targets, run PEFT-cache and FP8 LoRA regression tests for eager and CUDA-graph paths, then run the generated rank-16 FP8 LoRA end-to-end test against the small Qwen3 FP8 model. Include a BF16 adapter control and compare LoRA-on against LoRA-off output.
+- Add `tests/unittest/others/test_lora_manager.py` to `l0_h100.yml` so the shared capability and native SM90 paths have explicit CI coverage.
+- Recalculate PEFT-cache page capacity from the selected homogeneous adapter dtype so an FP8 cache uses the configured byte budget instead of retaining the model-dtype element count.
+- Treat SM120/SM121 as a separate kernel-enablement project: validate the required CUTLASS collective and launch constraints, add architecture-specific instantiations if needed, and keep runtime capability detection authoritative.
+- Run full-model routed-expert MoE FP8 LoRA E2E validation before considering the option-3 prototype for production. Include numerical comparison, CUDA-graph replay, workspace cost, and throughput/latency measurements.
+- Characterize dense native FP8 LoRA performance on both SM90 and SM100 against the compute-dtype fallback, including eager and CUDA-graph execution across representative ranks and batch shapes.
 
 ### Branch roles
 
 - `lora-analysis` is the umbrella investigation branch. It retains the validation tests, historical root-cause notes, and alternative implementation work for reference.
+- `fp8-lora-b200` was the review branch for merged PR #17521. Its reviewed tip was `a4483f2`; upstream contains the squashed implementation at `aaaf65998b`, and the local worktree/branch were removed after merge.
 - `fp8-lora-grouped-gemm` is the broad implementation branch. It retains the native Hopper FP8 grouped GEMM, regression fixes, PEFT cache design notes, the homogeneous FP8 cache prototype, and the activation conversion required by block-scaled FP8 models.
 - `fp8-lora-dense-minimal` is the historical review branch for merged PR #16810. Its final reviewed tip is `f8cbd4128f`; upstream contains the squashed implementation at `d247d1454a`.
 - `fp8-lora-moe-native` is the option-3 experiment: native FP8 routed-expert LoRA using FP8 activation/result scratch around the existing single-dtype grouped GEMMs. Its signed and H100-validated tip is `b1c01ed285`.
