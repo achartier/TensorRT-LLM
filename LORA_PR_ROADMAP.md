@@ -5,7 +5,7 @@ with bf16 and fp8 adapter weights. Each section is a self-contained PR.
 
 **Jira**: TRTLLM-15314 tracks the complete LoRA investigation and follow-up work in this roadmap.
 
-## Current Status (2026-08-23)
+## Current Status (2026-08-25)
 
 ### Landed upstream
 
@@ -18,6 +18,7 @@ with bf16 and fp8 adapter weights. Each section is a self-contained PR.
 ### In review
 
 - H100 L0 coverage is proposed in #18114. It adds `tests/unittest/others/test_lora_manager.py` to `l0_h100.yml` so shared LoRA loading, FP8 conversion, and native SM90 capability paths run in H100 CI.
+- Exact PEFT-cache byte-budget accounting is proposed in #18200. It recalculates host and device page capacity from the first adapter's homogeneous dtype, preserves explicit logical capacity, and fixes percentage-based device sizing to reuse one derived byte budget. Clean H100 build and runtime validation remain pending.
 
 ### Post-merge state
 
@@ -26,11 +27,11 @@ with bf16 and fp8 adapter weights. Each section is a self-contained PR.
 - The final PR CI twice timed out in `TestNemotron3Super120B::test_auto_dtype[mtp_nextn=0-block_reuse=False-use_py_transceiver=False]` on different B200 nodes. This exact disaggregated-serving test was previously tracked by NVBug 6465993 and fixed by #16505 (`cf44a1ccee`). The test disables LoRA and runs outside the SM90-only FP8 path, so no code-path relationship to #16810 was found. The PR subsequently merged.
 - The final #17521 pre-merge pipeline (`L0_MergeRequest_PR` #55954) passed on reviewed tip `a4483f2`; the PR then merged as `aaaf65998b`.
 - #18114 was validated from a clean native-SM90 Release build and wheel installation on an H100 PCIe GPU. The complete LoRA manager module passed with 18 tests and 3 subtests.
-- Exact PEFT-cache byte-budget recalculation, SM120/SM121 support, routed-expert MoE support, and broader performance characterization remain follow-up work.
+- SM120/SM121 support, routed-expert MoE support, and broader performance characterization remain follow-up work.
 
 ### Next steps
 
-- Recalculate PEFT-cache page capacity from the selected homogeneous adapter dtype so an FP8 cache uses the configured byte budget instead of retaining the model-dtype element count.
+- Validate #18200 from a clean H100 build, run the relevant PEFT and LoRA cache tests, and drive the PR through review and CI.
 - Treat SM120/SM121 as a separate kernel-enablement project: validate the required CUTLASS collective and launch constraints, add architecture-specific instantiations if needed, and keep runtime capability detection authoritative.
 - Run full-model routed-expert MoE FP8 LoRA E2E validation before considering the option-3 prototype for production. Include numerical comparison, CUDA-graph replay, workspace cost, and throughput/latency measurements.
 - Characterize dense native FP8 LoRA performance on both SM90 and SM100 against the compute-dtype fallback, including eager and CUDA-graph execution across representative ranks and batch shapes.
@@ -39,6 +40,7 @@ with bf16 and fp8 adapter weights. Each section is a self-contained PR.
 
 - `lora-analysis` is the umbrella investigation branch. It retains the validation tests, historical root-cause notes, and alternative implementation work for reference.
 - `test-lora-manager-h100-ci` is the review branch for #18114, which adds the shared LoRA manager tests to the H100 L0 test list.
+- `fp8-lora-peft-cache-capacity` is the review branch for #18200. Its rebased tip is `4d4cab4621`; it retains the normalized cache configuration, derives a stable device byte budget, recalculates host/device page counts from the selected adapter dtype, and adds BF16-to-FP8 host/device capacity regressions.
 - `fp8-lora-b200` was the review branch for merged PR #17521. Its reviewed tip was `a4483f2`; upstream contains the squashed implementation at `aaaf65998b`, and the local worktree/branch were removed after merge.
 - `fp8-lora-grouped-gemm` is the broad implementation branch. It retains the native Hopper FP8 grouped GEMM, regression fixes, PEFT cache design notes, the homogeneous FP8 cache prototype, and the activation conversion required by block-scaled FP8 models.
 - `fp8-lora-dense-minimal` is the historical review branch for merged PR #16810. Its final reviewed tip is `f8cbd4128f`; upstream contains the squashed implementation at `d247d1454a`.
@@ -48,7 +50,7 @@ with bf16 and fp8 adapter weights. Each section is a self-contained PR.
 
 The dense implementation now lets the first supplied adapter select one cache dtype. Host and device page managers are reinitialized while empty, later adapters must use the same dtype, and source/page plus host/device dtype mismatches are rejected. The selected dtype is exposed through nanobind and propagated to LoRA execution. Because the grouped GEMM is single-dtype, `LoraLayer` saturates FP16, BF16, or FP32 activations to the E4M3 finite range and casts them to E4M3 when the cache is FP8. It casts the LoRA result back to the original activation dtype before the caller accumulates it. Other activation/cache dtype mismatches remain errors. This adds no public configuration surface.
 
-The current cache page count is still calculated from the model dtype before the first adapter arrives. Retyping the same element capacity from BF16 to FP8 is safe but uses less memory than the configured byte budget. Recomputing capacity from the selected adapter dtype remains a follow-up optimization.
+#18200 keeps the provisional model-dtype allocation so cache-capacity APIs remain available before the first adapter arrives. When the first adapter selects the homogeneous dtype, the manager recalculates both page configurations from the normalized cache settings. Direct host byte limits and the fixed byte budget derived from `deviceCachePercent` therefore gain the expected FP8 capacity, while explicit `numHostModuleLayer` and `numDeviceModuleLayer` logical capacities remain unchanged. Matching dtype/page configurations retain the original allocation; differing empty page managers are replaced together.
 
 ### H100 validation results
 
@@ -67,7 +69,7 @@ The merged production implementation keeps native-FP8 support dense-only and del
 
 The option-3 experiment resolves the routed-expert dtype/stride boundary without changing base-MoE precision. Python propagates the PEFT cache dtype into the fused op; C++ allocates capture-stable FP8 input/result scratch, converts BF16/FP16 activations into E4M3 for the existing grouped GEMMs, and restores their output before activation and finalization. Eager and CUDA-graph op-level tests pass. This remains separate from the minimal dense patch until full MoE-model E2E and performance data justify the added workspace and conversion cost.
 
-Exact byte-capacity recalculation, full MoE-model E2E, broader numerical comparison, and dense/MoE performance measurement remain follow-up work.
+Full MoE-model E2E, broader numerical comparison, and dense/MoE performance measurement remain follow-up work.
 
 The PR sections below preserve the original decomposition; this status block supersedes their older dependency and blocker statements.
 
