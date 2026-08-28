@@ -14,11 +14,8 @@ with bf16 and fp8 adapter weights. Each section is a self-contained PR.
 - LoRA weights were removed from PyTorch request broadcast in #12959 (`3db10d9179`), so the pickle replacement proposed in PR 5 is no longer needed for this path.
 - Dense FP8 LoRA support landed in #16810 (`d247d1454a`). The merged scope keeps adapter weights and activations in E4M3 through the homogeneous PEFT cache and native grouped GEMM, supports eager and CUDA-graph execution, and casts the LoRA delta back to the model activation dtype before accumulation.
 - B200 native FP8 LoRA support landed in #17521 (`aaaf65998b`). The merged scope adds dedicated SM100 eager and CUDA-graph grouped-GEMM dispatch, runtime kernel-capability detection, B200 regression coverage, and architecture support documentation while preserving compute-dtype fallback when native kernels are unavailable.
+- H100 L0 coverage landed in #18114 (`95af10a8f1`). It adds `tests/unittest/others/test_lora_manager.py` to `l0_h100.yml` so shared LoRA loading, FP8 conversion, and native SM90 capability paths run in H100 CI.
 - Exact PEFT-cache byte-budget accounting landed in #18200 (`ad84866c81`). It recalculates host and device page capacity from the first adapter's homogeneous dtype, preserves explicit logical capacity, and fixes percentage-based device sizing to reuse one derived byte budget.
-
-### In review
-
-- H100 L0 coverage is proposed in #18114. It adds `tests/unittest/others/test_lora_manager.py` to `l0_h100.yml` so shared LoRA loading, FP8 conversion, and native SM90 capability paths run in H100 CI.
 
 ### Post-merge state
 
@@ -38,7 +35,7 @@ with bf16 and fp8 adapter weights. Each section is a self-contained PR.
 ### Branch roles
 
 - `lora-analysis` is the umbrella investigation branch. It retains the validation tests, historical root-cause notes, and alternative implementation work for reference.
-- `test-lora-manager-h100-ci` is the review branch for #18114, which adds the shared LoRA manager tests to the H100 L0 test list.
+- `test-lora-manager-h100-ci` was the review branch for merged PR #18114. Upstream contains the squashed implementation at `95af10a8f1`.
 - `fp8-lora-peft-cache-capacity` was the review branch for merged PR #18200. Upstream contains the squashed implementation at `ad84866c81`.
 - `fp8-lora-b200` was the review branch for merged PR #17521. Its reviewed tip was `a4483f2`; upstream contains the squashed implementation at `aaaf65998b`, and the local worktree/branch were removed after merge.
 - `fp8-lora-grouped-gemm` is the broad implementation branch. It retains the native Hopper FP8 grouped GEMM, regression fixes, PEFT cache design notes, the homogeneous FP8 cache prototype, and the activation conversion required by block-scaled FP8 models.
